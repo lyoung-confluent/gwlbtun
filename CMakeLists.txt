@@ -18,5 +18,7 @@ add_compile_options("")
 
 add_executable(gwlbtun main.cpp UDPPacketReceiver.cpp UDPPacketReceiver.h GenevePacket.cpp GenevePacket.h TunInterface.cpp TunInterface.h utils.cpp utils.h PacketHeaderV4.cpp PacketHeaderV4.h PacketHeaderV6.cpp PacketHeaderV6.h GeneveHandler.cpp GeneveHandler.h FlowCache.h FlowCacheHealthCheck.cpp Logger.cpp Logger.h
         HealthCheck.h
-        FlowCacheHealthCheck.cpp)
+        FlowCacheHealthCheck.cpp
+        PrometheusExporter.h
+        PrometheusExporter.cpp)
 target_link_libraries (gwlbtun ${CMAKE_THREAD_LIBS_INIT})

@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstring>
 #include "Logger.h"
+#include "PrometheusExporter.h"
 
 using namespace std::string_literals;
 
@@ -56,6 +57,9 @@ void deleteInterfaceCallback(std::string ingressInt, const std::string egressInt
     }
 }
 
+// Output format for the health check port.
+enum class HealthCheckFormat { TEXT, JSON, PROMETHEUS };
+
 /**
  * Performs a health check of the GeneveHandler and sends an HTTP/1.1 string conveying that status. The HTTP header
  * has a 200 code if everything is well, a 503 if not.
@@ -63,21 +67,36 @@ void deleteInterfaceCallback(std::string ingressInt, const std::string egressInt
  * @param details true to return packet counters, false to just return the status code.
  * @param gh The GeneveHandler to return the status for.
  * @param s The socket to send the health check to
- * @param json Whether to output as human text (false) or json (true)
+ * @param format Whether to output as human text, JSON, or Prometheus text exposition format.
  */
-void performHealthCheck(bool details, GeneveHandler *gh, int s, bool json)
+void performHealthCheck(bool details, GeneveHandler *gh, int s, HealthCheckFormat format)
 {
     GeneveHandlerHealthCheck ghhc = gh->check();
 
     std::stringstream responseStream;
+    const char *contentType = format == HealthCheckFormat::JSON ? "application/json" :
+                               format == HealthCheckFormat::PROMETHEUS ? "text/plain; version=0.0.4" : "text/html";
 
     responseStream << "HTTP/1.1 " << (gh->healthy ? "200 OK" : "503 Service Unavailable") << "\r\n"
                    << "Cache-Control: max-age=0, no-cache\r\n"
-                   << "Content-Type: " << (json ? "application/json" : "text/html") << "\r\n";
+                   << "Content-Type: " << contentType << "\r\n";
 
     if (details) {
-        std::string body = json ? ghhc.output_json().dump() :
-            "<!DOCTYPE html>\n<html lang=\"en-us\">\n<head><title>Health check</title></head><body>" + ghhc.output_str() + "\n</body></html>";
+        std::string body;
+        switch(format)
+        {
+            case HealthCheckFormat::JSON:
+                body = ghhc.output_json().dump();
+                break;
+            case HealthCheckFormat::PROMETHEUS:
+            {
+                auto j = ghhc.output_json();
+                body = healthCheckToPrometheus(j, gh->healthy);
+                break;
+            }
+            default:
+                body = "<!DOCTYPE html>\n<html lang=\"en-us\">\n<head><title>Health check</title></head><body>" + ghhc.output_str() + "\n</body></html>";
+        }
 
         responseStream << "Content-Length: " << body.length() << "\r\n\r\n" << body;
     } else {
@@ -121,6 +140,7 @@ void printHelp(char *progname)
 #endif
             "  -p PORT    Listen to TCP port PORT and provide a health status report on it.\n"
             "  -j         For health check detailed statistics, output as JSON instead of text.\n"
+            "  -m         For health check detailed statistics, output as Prometheus text exposition format instead of text.\n"
             "  -s         Only return simple health check status (only the HTTP response code), instead of detailed statistics.\n"
             "  -d         Enable debugging output. Short version of --logging all=debug.\n"
             "\n"
@@ -176,7 +196,8 @@ int main(int argc, char *argv[])
     int tunnelTimeout = 0, cacheTimeout = 350;
     int udpthreads = numCores(), tunthreads = numCores();
     std::string udpaffinity, tunaffinity, logoptions;
-    bool detailedHealth = true, printHelpFlag = false, jsonHealth = false;
+    bool detailedHealth = true, printHelpFlag = false;
+    HealthCheckFormat healthFormat = HealthCheckFormat::TEXT;
 
     static struct option long_options[] = {
             {"cmdnew", required_argument, NULL, 'c'},
@@ -193,12 +214,13 @@ int main(int argc, char *argv[])
             {"logging", required_argument, NULL, 0},       // optind 11
             {"json", no_argument, NULL, 'j'},              // optind 12
             {"idle", required_argument, NULL, 'i'},        // optind 13
+            {"prometheus", no_argument, NULL, 'm'},        // optind 14
             {0, 0, 0, 0}
     };
 
     // Argument parsing
     int optind;
-    while ((c = getopt_long (argc, argv, "h?djxc:r:t:p:si:", long_options, &optind)) != -1)
+    while ((c = getopt_long (argc, argv, "h?djmxc:r:t:p:si:", long_options, &optind)) != -1)
     {
         switch(c)
         {
@@ -241,7 +263,10 @@ int main(int argc, char *argv[])
                 logoptions = "all=debug";
                 break;
             case 'j':
-                jsonHealth = true;
+                healthFormat = HealthCheckFormat::JSON;
+                break;
+            case 'm':
+                healthFormat = HealthCheckFormat::PROMETHEUS;
                 break;
             case 'i':
                 cacheTimeout = atoi(optarg);
@@ -316,7 +341,7 @@ int main(int argc, char *argv[])
             socklen_t fromlen = sizeof(from);
             hsClient = accept(healthSocket, (struct sockaddr *)&from, &fromlen);
             LOG(LS_HEALTHCHECK, LL_DEBUG, "Processing a health check client for " + sockaddrToName((struct sockaddr *)&from));
-            performHealthCheck(detailedHealth, gh, hsClient, jsonHealth);
+            performHealthCheck(detailedHealth, gh, hsClient, healthFormat);
             close(hsClient);
             ticksSinceCheck = 60;
         }
