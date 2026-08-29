@@ -7,8 +7,8 @@ name: Build (Amazon Linux 2023)
 # Each arch is compiled natively on its own runner (no QEMU emulation). On a
 # push to `main`, each native build is pushed to GHCR by digest (untagged),
 # then the `manifest` job combines the two digests into a single multi-arch
-# manifest tagged with the commit SHA. Other triggers (PRs, manual runs) just
-# build natively on each arch to validate, without pushing anything.
+# manifest tagged with the commit SHA and `latest`. Other triggers (PRs, manual
+# runs) just build natively on each arch to validate, without pushing anything.
 
 on:
   push:
@@ -141,6 +141,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag ${{ env.IMAGE }}:${{ github.sha }} \
+            --tag ${{ env.IMAGE }}:latest \
             $(printf '${{ env.IMAGE }}@sha256:%s ' *)
 
       - name: Inspect image
