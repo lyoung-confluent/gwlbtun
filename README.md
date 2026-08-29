@@ -115,6 +115,10 @@ If RcvbufErrors is incrementing steadily, you should increase the rmem values as
 ### Health Check output
 If you do not provide the -s flag, the health check port produces human-readable statistics about the traffic gwlbtun is processing. If you add in the -j flag, this output is formatted as JSON for consumption by outside monitoring processes. If you add in the -m flag instead, this output is formatted as Prometheus text exposition format, suitable for a Prometheus server to scrape directly from the health check port.
 
+With -m, the health check port distinguishes between the /metrics path and everything else: only a request for /metrics returns the Prometheus metrics body, and it always does so with HTTP 200 (Prometheus discards the body of any non-2xx scrape, so unhealthy state is instead conveyed via the `gwlbtun_up` metric in the body). Any other path returns a plain 200/503 status with no body, reflecting gwlbtun's actual health -- this lets something else (e.g. GWLB's own target group health check) keep using this same port normally alongside a Prometheus scraper.
+
+Note that a /metrics request makes gwlbtun re-evaluate its flow caches, evicting any flows that have gone idle past their timeout, same as any other detailed health check request. Pointing a Prometheus scraper at /metrics therefore ties flow cache eviction to your scrape interval, not just to traffic patterns. Requests to any other path while in -m mode do not trigger this, since they skip the health check evaluation entirely.
+
 ## Security
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
 
