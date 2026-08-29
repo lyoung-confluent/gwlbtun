@@ -1,137 +1,32 @@
-# aws-gateway-load-balancer-tunnel-handler
-This software supports using the Gateway Load Balancer AWS service. It is designed to be ran on a GWLB target, takes in the Geneve encapsulated data and creates Linux tun (layer 3) interfaces per endpoint. This allows standard Linux tools (iptables, etc.) to work with GWLB.
+# gwlbtun (fork)
 
-See the 'example-scripts' folder for some of the options that can be used as create scripts for this software.
+This is a fork of [aws-samples/aws-gateway-load-balancer-tunnel-handler](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler), with a number of fixes merged in that aren't yet in upstream.
 
-## To Compile
-On an Amazon Linux 2 or AL2023 host, copy this code down, and install dependencies:
+## Open PRs against upstream
 
-```
-sudo yum groupinstall "Development Tools"
-sudo yum install cmake3
-```
+- [#36 fix: close tun queue fds and raw socket on ENI teardown](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/36)
+- [#35 feat: register shutdown handler for SIGTERM](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/35)
+- [#34 fix: GeneveHandler::healthy is never updated, so it stays permanently true](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/34)
+- [#33 fix: compiler warnings under -Wall -Wextra](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/33)
+- [#32 fix: unchecked and incorrect socket/write return-value handling](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/32)
+- [#31 fix: add per-option bounds check to Geneve options parser](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/31)
+- [#30 fix: unlikely stack buffer overflow in sendUdp](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/30)
+- [#29 fix: uninitialized healthSocket can cause busy-loop when -p is not supplied](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/29)
+- [#28 fix: sendUdp leaks stack data via UDP checksum](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/28)
+- [#27 feat(metrics): add Prometheus text exposition format](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/27)
+- [#26 fix(metrics): malformed JSON from FlowCacheHealthCheck::output_json()](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/26)
+- [#25 feat(build): add GitHub Actions pipeline](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/25)
+- [#24 fix(cmake): remove hardcoded Boost include path](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/24)
 
-In the directory with the source code, do ```cmake3 .; make``` to build. This code works with both Intel and Graviton-based architectures.
+For build instructions, usage, and everything else, see the [upstream README](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler#readme) — this fork doesn't change any of that.
 
-**This version requires the Boost libraries, version 1.83.0 or greater.** This tends to be a newer version than available on distributions (for example, at time of writing, 1.75 is available in AL2023). You may need to go to https://www.boost.org/, download, and install a newer version than what's available in the repositories. Note that only the headers are needed - you do not need to go through Boost compilation. If your Boost install isn't in a standard system location, point cmake at it with `-DBOOST_ROOT=/path/to/boost`, e.g. ```cmake3 -DBOOST_ROOT=/home/ec2-user/boost .; make```.  
+## CI / Docker image
 
-## Usage
-For Linux, the application requires CAP_NET_ADMIN capability to create the tunnel interfaces along with the example helper scripts.
-```
-Tunnel Handler for AWS Gateway Load Balancer
-Usage: ./gwlbtun [options]
-Example: ./gwlbtun
+This fork has GitHub Actions CI ([.github/workflows/build.yml](.github/workflows/build.yml)) that builds gwlbtun natively for amd64/arm64 and, on every push to `main`, publishes a multi-arch Docker image to GHCR:
 
-  -h         Print this help
-  -c FILE    Command to execute when a new tunnel has been built. See below for arguments passed.
-  -r FILE    Command to execute when a tunnel times out and is about to be destroyed. See below for arguments passed.
-  -t TIME    Minimum time in seconds between last packet seen and to consider the tunnel timed out. Set to 0 (the default) to never time out tunnels.
-             Note the actual time between last packet and the destroy call may be longer than this time.
-  -p PORT    Listen to TCP port PORT and provide a health status report on it.
-  -j         For health check detailed statistics, output as JSON instead of text.  
-  -s         Only return simple health check status (only the HTTP response code), instead of detailed statistics.
-  -d         Enable debugging output. Short version of --logging all=debug.
-
-Threading options:
-  --udpthreads NUM         Generate NUM threads for the UDP receiver.
-  --udpaffinity AFFIN      Generate threads for the UDP receiver, pinned to the cores listed. Takes precedence over udptreads.
-  --tunthreads NUM         Generate NUM threads for each tunnel processor.
-  --tunaffinity AFFIN      Generate threads for each tunnel processor, pinned to the cores listed. Takes precedence over tunthreads.
-
-AFFIN arguments take a comma separated list of cores or range of cores, e.g. 1-2,4,7-8.
-It is recommended to have the same number of UDP threads as tunnel processor threads, in one-arm operation.
-If unspecified, --udpthreads <N> and --tunthreads <N> will be assumed as a default, based on the number of cores present.
-
-Logging options:
-  --logging CONFIG         Set the logging configuration, as described below.
----------------------------------------------------------------------------------------------------------
-Hook scripts arguments:
-These arguments are provided when gwlbtun calls the hook scripts (the -c <FILE> and/or -r <FILE> command options).
-On gwlbtun startup, it will automatically create gwi-<X> and gwo-<X> interfaces upon seeing the first packet from a specific GWLBE, and the hook scripts are invoked when interfaces are created or destroyed. You should at least disable rpf_filter for the gwi-<X> tunnel interface with the hook scripts.
-The hook scripts will be called with the following arguments:
-1: The string 'CREATE' or 'DESTROY', depending on which operation is occurring.
-2: The interface name of the ingress interface (gwi-<X>).
-3: The interface name of the egress interface (gwo-<X>).  Packets can be sent out via in the ingress
-   as well, but having two different interfaces makes routing and iptables easier.
-4: The GWLBE ENI ID in base 16 (e.g. '2b8ee1d4db0c51c4') associated with this tunnel.
-
-The <X> in the interface name is replaced with the base 60 encoded ENI ID (to fit inside the 15 character
-device name limit).
----------------------------------------------------------------------------------------------------------
-The logging configuration can be set by passing a string to the --logging option. That string is a series of <section>=<level>, comma separated and case insensitive.
-The available sections are: core udp geneve tunnel healthcheck all 
-The logging levels available for each are: critical important info debug debugdetail 
-The default level for all secions is 'important'.
+```bash
+docker run --rm --cap-add=NET_ADMIN --device=/dev/net/tun -p 80:80 \
+  ghcr.io/lyoung-confluent/gwlbtun:latest -p 80
 ```
 
-## Source code layout
-main.cpp contains the start of the code, but primarily interfaces with GeneveHandler, defined in GeneveHandler.cpp. 
-That class launches the multithreaded UDP receiver, and then creates GeneveHandlerENI class instances per GWLB ENI detected.
-The GeneveHandlerENI class instantiates the TunInterfaces as needed, and generally manages the entire packet handling flow for that ENI. 
-GenevePacket and PacketHeader handle parsing and validating GENEVE packets and IP packets respectively, and are called by GeneveHandler as needed.
-Logger handles processing logging messages from all threads, ensuring they get output correctly to terminal, and filtering against the logging configuration provided.
-
-## Multithreading
-gwlbtun supports multithreading, and doing so is recommended on multicore systems. You can specify either the number or threads, or a specific affinity for CPU cores, for both the UDP receiver and the tunnel handler threads. You should test to see which set of options work best for your workload, especially if you have additional processes doing processing on the device. By default, gwlbtun will create one UDP receive thread and one tunnel processing thread per core. 
-
-gwlbtun labels its threads with its name (gwlbtun), and either Uxxx for the UDP threads option which is simply an index, or UAxxx for the UDP affinity option, with the number being the core that thread is set for. The tunnel threads are labeled the same, except with a T instead of a U.
-
-## Kernel sysctls
-Because most usages of gwlbtun have it sitting in the middle of a communications path (bump in the wire), none of the traffic is directly destined for it. Thus, in most cases, you should disable the reverse path filter (rp_filter) on associated GWI interfaces, in order for the kernel to allow the traffic through. The hook scripts are a good place to do this (the input interface is passed as $2) and the examples in example-scripts show different ways. One option:
-```
-sysctl net.ipv4.conf.$2.rp_filter=0
-```
-
-Additionally, if you're doing NAT or other forwarding operations, you need to enable IP forwarding for IPv4 and IPv6 as appropriate:
-```
-sysctl net.ipv4.ip_forward=1
-sysctl net.ipv6.conf.all.forwarding=1
-```
-
-## Advanced usages
-
-### No return mode
-If you are only interested in the ability to receive traffic to an L3 tunnel interface, and will never send traffic back to GWLB, you can #define NO_RETURN_TRAFFIC in utils.h. This removes the gwo interfaces and all cookie flow tracking, which saves on time used to synchronize that flow tracking table. Note that this puts your appliance in a two-arm mode with GWLB, and also may result in asymmetric traffic routing, which may have performance implications elsewhere. 
-
-### Handling overlapping CIDRs
-See the example-scripts/create-nat-overlapping.sh script for an example of handling overlapping CIDRs in different GWLB endpoints in two-arm mode. This script leverages conntrack and marking to accomplish this.
-
-### Supporting very high packet rates
-If your deployment is supporting high packet rates (greater than 1M pps typically), you may need to tweak some kernel settings to handle microbursts in traffic well. In testing in extremely high PPS scenarios (a fleet of iperf-based senders, all going through one c6in.32xlarge instance), you may want to consider settings akin to this (if memory allows):
-```
-sysctl -w net.core.rmem_max=50000000
-sysctl -w net.core.rmem_default=50000000
-```
-
-You can see if this problem is occurring by monitoring for UDP receive buffer errors (RcvbufErrors) with commands similar to:
-```
-# cat /proc/net/snmp | grep Udp: 
-Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
-Udp: 2985556669902 428 0 666162 0 0 0 0 0
-```
-
-If RcvbufErrors is incrementing steadily, you should increase the rmem values as described above.
-
-### Health Check output
-If you do not provide the -s flag, the health check port produces human-readable statistics about the traffic gwlbtun is processing. If you add in the -j flag, this output is formatted as JSON for consumption by outside monitoring processes. If you add in the -m flag instead, this output is formatted as Prometheus text exposition format, suitable for a Prometheus server to scrape directly from the health check port.
-
-With -m, the health check port distinguishes between the /metrics path and everything else: only a request for /metrics returns the Prometheus metrics body, and it always does so with HTTP 200 (Prometheus discards the body of any non-2xx scrape, so unhealthy state is instead conveyed via the `gwlbtun_up` metric in the body). Any other path returns a plain 200/503 status with no body, reflecting gwlbtun's actual health -- this lets something else (e.g. GWLB's own target group health check) keep using this same port normally alongside a Prometheus scraper.
-
-Note that a /metrics request makes gwlbtun re-evaluate its flow caches, evicting any flows that have gone idle past their timeout, same as any other detailed health check request. Pointing a Prometheus scraper at /metrics therefore ties flow cache eviction to your scrape interval, not just to traffic patterns. Requests to any other path while in -m mode do not trigger this, since they skip the health check evaluation entirely.
-
-## Security
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
-
-## License
-This tool is licensed under the MIT-0 License. See the LICENSE file.
-
-### json.hpp
-The class is licensed under the MIT License:
-
-Copyright © 2013-2022 Niels Lohmann
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+`gwlbtun` needs `CAP_NET_ADMIN` and access to `/dev/net/tun` to create tunnel interfaces; pass any of its normal CLI options after the image name.

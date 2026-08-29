@@ -145,4 +145,4 @@ jobs:
             $(printf '${{ env.IMAGE }}@sha256:%s ' *)
 
       - name: Inspect image
-        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ github.sha }}
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest
