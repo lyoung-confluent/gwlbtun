@@ -1,8 +1,5 @@
-# gwlbtun (fork)
-
-This is a fork of [aws-samples/aws-gateway-load-balancer-tunnel-handler](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler), with a number of fixes merged in that aren't yet in upstream.
-
-## Open PRs against upstream
+# AWS Gateway Load Balancer (GWLB) Handler - gwlbtun
+This is a fork of [aws-samples/aws-gateway-load-balancer-tunnel-handler](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler), with a number of fixes/improvements that aren't yet upstream:
 
 - [#36 fix: close tun queue fds and raw socket on ENI teardown](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/36)
 - [#35 feat: register shutdown handler for SIGTERM](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/35)
@@ -20,9 +17,8 @@ This is a fork of [aws-samples/aws-gateway-load-balancer-tunnel-handler](https:/
 
 For build instructions, usage, and everything else, see the [upstream README](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler#readme) — this fork doesn't change any of that.
 
-## CI / Docker image
-
-This fork has GitHub Actions CI ([.github/workflows/build.yml](.github/workflows/build.yml)) that builds gwlbtun natively for amd64/arm64 and, on every push to `main`, publishes a multi-arch Docker image to GHCR:
+## Docker image
+This fork has GitHub Actions CI ([.github/workflows/build.yml](.github/workflows/build.yml)) that builds `gwlbtun` natively for `amd64`/`arm64` on Amazon Linux 2023 (AL2023). Every push to `main` publishes a multi-arch Docker image [to GHCR](https://github.com/lyoung-confluent/gwlbtun/pkgs/container/gwlbtun):
 
 ```bash
 docker run --rm --cap-add=NET_ADMIN --device=/dev/net/tun -p 80:80 \
