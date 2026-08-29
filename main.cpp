@@ -264,7 +264,7 @@ void printHelp(char *progname)
  *
  * @param sig
  */
-void shutdownHandler(int sig)
+void shutdownHandler([[maybe_unused]] int sig)
 {
     keepRunning = 0;
 }
