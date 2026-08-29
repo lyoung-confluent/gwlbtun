@@ -111,7 +111,7 @@ std::string healthCheckToPrometheus(json &ghhc, bool overallHealthy)
             std::string labels = "{"s + label("eni", eniStr) + ","s + label("cache", cacheLabel) + "}"s;
 
             cacheEntries.push_back("gwlbtun_flowcache_entries"s + labels + " "s + std::to_string(fc.value("size", (uint64_t)0)));
-            cacheTimedOut.push_back("gwlbtun_flowcache_timed_out_total"s + labels + " "s + std::to_string(fc.value("timedOut", (uint64_t)0)));
+            cacheTimedOut.push_back("gwlbtun_flowcache_evicted_last_check"s + labels + " "s + std::to_string(fc.value("timedOut", (uint64_t)0)));
             cacheIdleTimeout.push_back("gwlbtun_flowcache_idle_timeout_seconds"s + labels + " "s + std::to_string(fc.value("idleTimeoutSecs", 0)));
         }
     }
@@ -124,7 +124,7 @@ std::string healthCheckToPrometheus(json &ghhc, bool overallHealthy)
     emitFamily(out, "gwlbtun_tunnel_thread_bytes_total", "Bytes read from the OS by the tunnel handler thread.", "counter", tunThreadBytes);
     emitFamily(out, "gwlbtun_tunnel_thread_seconds_since_last_packet", "Seconds since the tunnel handler thread last saw a packet.", "gauge", tunThreadSecs);
     emitFamily(out, "gwlbtun_flowcache_entries", "Number of flows currently tracked in the flow cache.", "gauge", cacheEntries);
-    emitFamily(out, "gwlbtun_flowcache_timed_out_total", "Flows evicted from the flow cache for being idle.", "counter", cacheTimedOut);
+    emitFamily(out, "gwlbtun_flowcache_evicted_last_check", "Flows evicted from the flow cache for being idle during the most recent health check pass. Not cumulative: resets every time the health check runs, so it must not be scraped as a counter.", "gauge", cacheTimedOut);
     emitFamily(out, "gwlbtun_flowcache_idle_timeout_seconds", "Idle timeout configured for the flow cache, in seconds.", "gauge", cacheIdleTimeout);
 
     return out.str();

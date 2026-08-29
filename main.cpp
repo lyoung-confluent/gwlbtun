@@ -15,6 +15,8 @@
 #include <cstring>
 #include "Logger.h"
 #include "PrometheusExporter.h"
+#include <sys/socket.h>
+#include <sys/time.h>
 
 using namespace std::string_literals;
 
@@ -61,23 +63,79 @@ void deleteInterfaceCallback(std::string ingressInt, const std::string egressInt
 enum class HealthCheckFormat { TEXT, JSON, PROMETHEUS };
 
 /**
+ * Reads the HTTP request-target (path, without query string) from a client's request line, e.g. "/metrics" for
+ * "GET /metrics HTTP/1.1". Only used in Prometheus mode, to distinguish a Prometheus scrape of /metrics from any
+ * other request (e.g. a load balancer or GWLB health check hitting this same port). A short receive timeout is
+ * set so a client that connects without sending anything can't stall the health check loop.
+ *
+ * @param sock Client socket to read the request line from.
+ * @return The request path, or an empty string if it could not be read/parsed.
+ */
+std::string readRequestPath(int sock)
+{
+    struct timeval tv{2, 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    char buf[2048];
+    ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+    if(n <= 0)
+        return "";
+    buf[n] = '\0';
+
+    std::string request(buf);
+    size_t firstSpace = request.find(' ');
+    if(firstSpace == std::string::npos)
+        return "";
+    size_t secondSpace = request.find(' ', firstSpace + 1);
+    if(secondSpace == std::string::npos)
+        return "";
+
+    std::string path = request.substr(firstSpace + 1, secondSpace - firstSpace - 1);
+    size_t queryPos = path.find('?');
+    if(queryPos != std::string::npos)
+        path = path.substr(0, queryPos);
+
+    return path;
+}
+
+/**
  * Performs a health check of the GeneveHandler and sends an HTTP/1.1 string conveying that status. The HTTP header
  * has a 200 code if everything is well, a 503 if not.
+ *
+ * In Prometheus mode this only applies to the /metrics path, since that's the only response Prometheus itself
+ * will ever see: Prometheus treats any non-2xx scrape as failed and discards the body entirely, so /metrics always
+ * returns 200 and conveys unhealthy state via the gwlbtun_up metric in the body instead. Any other path in
+ * Prometheus mode gets the plain 200/503 status with no body, same as -s, so something else (e.g. GWLB's own
+ * target group health check) can keep using this port normally.
  *
  * @param details true to return packet counters, false to just return the status code.
  * @param gh The GeneveHandler to return the status for.
  * @param s The socket to send the health check to
  * @param format Whether to output as human text, JSON, or Prometheus text exposition format.
+ * @param path The request path, as returned by readRequestPath(). Only consulted in Prometheus mode.
  */
-void performHealthCheck(bool details, GeneveHandler *gh, int s, HealthCheckFormat format)
+void performHealthCheck(bool details, GeneveHandler *gh, int s, HealthCheckFormat format, const std::string &path)
 {
-    GeneveHandlerHealthCheck ghhc = gh->check();
+    bool servePrometheusMetrics = format == HealthCheckFormat::PROMETHEUS && path == "/metrics";
 
     std::stringstream responseStream;
+
+    if(format == HealthCheckFormat::PROMETHEUS && !servePrometheusMetrics)
+    {
+        responseStream << "HTTP/1.1 " << (gh->healthy ? "200 OK" : "503 Service Unavailable") << "\r\n"
+                       << "Cache-Control: max-age=0, no-cache\r\n"
+                       << "Content-Length: 0\r\n\r\n";
+        std::string response = responseStream.str();
+        send(s, response.c_str(), response.length(), 0);
+        return;
+    }
+
+    GeneveHandlerHealthCheck ghhc = gh->check();
     const char *contentType = format == HealthCheckFormat::JSON ? "application/json" :
                                format == HealthCheckFormat::PROMETHEUS ? "text/plain; version=0.0.4" : "text/html";
+    bool ok = format == HealthCheckFormat::PROMETHEUS || gh->healthy;
 
-    responseStream << "HTTP/1.1 " << (gh->healthy ? "200 OK" : "503 Service Unavailable") << "\r\n"
+    responseStream << "HTTP/1.1 " << (ok ? "200 OK" : "503 Service Unavailable") << "\r\n"
                    << "Cache-Control: max-age=0, no-cache\r\n"
                    << "Content-Type: " << contentType << "\r\n";
 
@@ -141,6 +199,7 @@ void printHelp(char *progname)
             "  -p PORT    Listen to TCP port PORT and provide a health status report on it.\n"
             "  -j         For health check detailed statistics, output as JSON instead of text.\n"
             "  -m         For health check detailed statistics, output as Prometheus text exposition format instead of text.\n"
+            "             Only the /metrics path returns metrics (always HTTP 200); any other path on this port returns a plain 200/503 status with no body.\n"
             "  -s         Only return simple health check status (only the HTTP response code), instead of detailed statistics.\n"
             "  -d         Enable debugging output. Short version of --logging all=debug.\n"
             "\n"
@@ -341,7 +400,8 @@ int main(int argc, char *argv[])
             socklen_t fromlen = sizeof(from);
             hsClient = accept(healthSocket, (struct sockaddr *)&from, &fromlen);
             LOG(LS_HEALTHCHECK, LL_DEBUG, "Processing a health check client for " + sockaddrToName((struct sockaddr *)&from));
-            performHealthCheck(detailedHealth, gh, hsClient, healthFormat);
+            std::string path = healthFormat == HealthCheckFormat::PROMETHEUS ? readRequestPath(hsClient) : "";
+            performHealthCheck(detailedHealth, gh, hsClient, healthFormat, path);
             close(hsClient);
             ticksSinceCheck = 60;
         }
