@@ -12,13 +12,12 @@ This is a fork of [aws-samples/aws-gateway-load-balancer-tunnel-handler](https:/
 - [#28 fix: sendUdp leaks stack data via UDP checksum](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/28)
 - [#27 feat(metrics): add Prometheus text exposition format](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/27)
 - [#26 fix(metrics): malformed JSON from FlowCacheHealthCheck::output_json()](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/26)
-- [#25 feat(build): add GitHub Actions pipeline](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/25)
 - [#24 fix(cmake): remove hardcoded Boost include path](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler/pull/24)
 
 For build instructions, usage, and everything else, see the [upstream README](https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler#readme) — this fork doesn't change any of that.
 
-## Docker image
-This fork has GitHub Actions CI ([.github/workflows/build.yml](.github/workflows/build.yml)) that builds `gwlbtun` natively for `amd64`/`arm64` on Amazon Linux 2023 (AL2023). Every push to `main` publishes a multi-arch Docker image [to GHCR](https://github.com/lyoung-confluent/gwlbtun/pkgs/container/gwlbtun):
+## Docker/OCI Image
+This fork has GitHub Actions pipeline ([.github/workflows/build.yml](.github/workflows/build.yml)) that builds `gwlbtun` natively for `amd64`/`arm64` on AL2023. Every push to `main` publishes a multi-arch Docker image [to GHCR](https://github.com/lyoung-confluent/gwlbtun/pkgs/container/gwlbtun):
 
 ```bash
 docker run --rm --cap-add=NET_ADMIN --device=/dev/net/tun -p 80:80 \
