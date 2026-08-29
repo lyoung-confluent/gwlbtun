@@ -435,7 +435,6 @@ int main(int argc, char *argv[])
                 performHealthCheck(detailedHealth, gh, hsClient, healthFormat, path);
                 close(hsClient);
             }
-            ticksSinceCheck = 60;
         }
 
         ticksSinceCheck --;
