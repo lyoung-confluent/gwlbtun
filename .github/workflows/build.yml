@@ -4,9 +4,11 @@ name: Build (Amazon Linux 2023)
 # which compiles gwlbtun inside an amazonlinux:2023 container so the linked
 # glibc matches the Amazon Linux hosts this handler runs on.
 #
-# The image is pushed to ghcr.io/lyoung-confluent/gwlbtun, tagged with the
-# commit SHA, only for pushes to `main`. Other triggers (PRs, manual runs)
-# still build the image for validation, without pushing it.
+# Each arch is compiled natively on its own runner (no QEMU emulation). On a
+# push to `main`, each native build is pushed to GHCR by digest (untagged),
+# then the `manifest` job combines the two digests into a single multi-arch
+# manifest tagged with the commit SHA. Other triggers (PRs, manual runs) just
+# build natively on each arch to validate, without pushing anything.
 
 on:
   push:
@@ -23,18 +25,26 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE: ghcr.io/lyoung-confluent/gwlbtun
+
 jobs:
-  docker:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,12 +57,91 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build (and push on main) multi-arch image
+      - name: Build and push by digest
+        id: build-push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           build-args: |
             BOOST_VERSION=${{ inputs.boost_version || '1.83.0' }}
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: ghcr.io/lyoung-confluent/gwlbtun:${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Build only (validate, no push)
+        if: "!(github.event_name == 'push' && github.ref == 'refs/heads/main')"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BOOST_VERSION=${{ inputs.boost_version || '1.83.0' }}
+          push: false
+
+      - name: Export digest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build-push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Export gwlbtun binary
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          target: export
+          build-args: |
+            BOOST_VERSION=${{ inputs.boost_version || '1.83.0' }}
+          outputs: type=local,dest=dist
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: gwlbtun-${{ matrix.arch }}
+          path: dist/gwlbtun
+          retention-days: 30
+
+  manifest:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ github.sha }} \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ github.sha }}

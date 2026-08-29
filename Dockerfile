@@ -4,9 +4,14 @@
 # linked glibc matches the Amazon Linux hosts this handler runs on, then
 # copies just the binary into a clean runtime image.
 #
-# Built via `docker buildx build --platform linux/amd64,linux/arm64 ...`;
-# each stage's base image and RUN steps execute natively or under QEMU
-# emulation for the target platform, so no cross-compilation setup is needed.
+# Built per-arch via `docker buildx build --platform linux/<arch> ...` on a
+# native runner for that arch (see .github/workflows/build.yml), so every
+# stage's RUN steps execute natively - no cross-compilation/emulation setup
+# needed.
+#
+# The `export` stage holds nothing but the compiled binary, so it can be
+# pulled out of the build with `--target export --output type=local,dest=...`
+# for uploading as a standalone workflow artifact, independent of the image.
 FROM amazonlinux:2023 AS builder
 
 ARG BOOST_VERSION=1.83.0
@@ -33,6 +38,9 @@ RUN set -eux; \
     cmake -S . -B /tmp/build -DCMAKE_BUILD_TYPE=Release -DBoost_INCLUDE_DIR=/tmp/boost; \
     cmake --build /tmp/build -j"$(nproc)"; \
     install -m 0755 /tmp/build/gwlbtun /usr/local/bin/gwlbtun
+
+FROM scratch AS export
+COPY --from=builder /usr/local/bin/gwlbtun /gwlbtun
 
 # Runtime base matches the builder so the linked glibc/libstdc++ versions
 # line up with what the binary was compiled against.
