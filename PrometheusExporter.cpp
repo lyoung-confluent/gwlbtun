@@ -71,7 +71,7 @@ std::string healthCheckToPrometheus(json &ghhc, bool overallHealthy)
         emitFamily(out, "gwlbtun_udp_receiver_seconds_since_last_packet", "Seconds since the UDP receiver thread last saw a packet.", "gauge", secsSince);
     }
 
-    std::vector<std::string> tunPkts, tunBytes, tunSecs, tunThreadUp, tunThreadPkts, tunThreadBytes, tunThreadSecs;
+    std::vector<std::string> tunPkts, tunBytes, tunDropped, tunSecs, tunThreadUp, tunThreadPkts, tunThreadBytes, tunThreadSecs;
     std::vector<std::string> cacheEntries, cacheTimedOut, cacheIdleTimeout;
 
     for(auto &eni : ghhc.value("enis", json::array()))
@@ -89,6 +89,7 @@ std::string healthCheckToPrometheus(json &ghhc, bool overallHealthy)
 
             tunPkts.push_back("gwlbtun_tunnel_packets_total"s + labels + " "s + std::to_string(tun.value("pktsOut", (uint64_t)0)));
             tunBytes.push_back("gwlbtun_tunnel_bytes_total"s + labels + " "s + std::to_string(tun.value("bytesOut", (uint64_t)0)));
+            tunDropped.push_back("gwlbtun_tunnel_packets_dropped_total"s + labels + " "s + std::to_string(tun.value("pktsDropped", (uint64_t)0)));
             tunSecs.push_back("gwlbtun_tunnel_seconds_since_last_packet"s + labels + " "s + std::to_string(tun.value("secsSincelastPacket", 0.0)));
 
             for(auto &t : tun.value("threads", json::array()))
@@ -118,6 +119,7 @@ std::string healthCheckToPrometheus(json &ghhc, bool overallHealthy)
 
     emitFamily(out, "gwlbtun_tunnel_packets_total", "Packets sent out to the OS via the tunnel interface.", "counter", tunPkts);
     emitFamily(out, "gwlbtun_tunnel_bytes_total", "Bytes sent out to the OS via the tunnel interface.", "counter", tunBytes);
+    emitFamily(out, "gwlbtun_tunnel_packets_dropped_total", "Packets dropped while writing to the OS via the tunnel interface (write error or short write).", "counter", tunDropped);
     emitFamily(out, "gwlbtun_tunnel_seconds_since_last_packet", "Seconds since the tunnel interface last saw a packet.", "gauge", tunSecs);
     emitFamily(out, "gwlbtun_tunnel_thread_up", "Whether the tunnel handler thread is healthy (1) or not (0).", "gauge", tunThreadUp);
     emitFamily(out, "gwlbtun_tunnel_thread_packets_total", "Packets read from the OS by the tunnel handler thread.", "counter", tunThreadPkts);

@@ -99,6 +99,29 @@ std::string readRequestPath(int sock)
 }
 
 /**
+ * Sends the entire response buffer on a (blocking) socket. send() may transmit fewer bytes than requested, so a
+ * single call is not enough; loop until it is all written or an error occurs. MSG_NOSIGNAL keeps a client that
+ * closed early from killing the process with SIGPIPE.
+ *
+ * @param s The socket to send on.
+ * @param response The full response to send.
+ */
+static void sendAll(int s, const std::string &response)
+{
+    size_t sent = 0;
+    while(sent < response.length())
+    {
+        ssize_t ret = send(s, response.c_str() + sent, response.length() - sent, MSG_NOSIGNAL);
+        if(ret < 0)
+        {
+            LOG(LS_HEALTHCHECK, LL_IMPORTANT, "Unable to send health check response: "s + std::strerror(errno));
+            break;
+        }
+        sent += ret;
+    }
+}
+
+/**
  * Performs a health check of the GeneveHandler and sends an HTTP/1.1 string conveying that status. The HTTP header
  * has a 200 code if everything is well, a 503 if not.
  *
@@ -126,7 +149,7 @@ void performHealthCheck(bool details, GeneveHandler *gh, int s, HealthCheckForma
                        << "Cache-Control: max-age=0, no-cache\r\n"
                        << "Content-Length: 0\r\n\r\n";
         std::string response = responseStream.str();
-        send(s, response.c_str(), response.length(), 0);
+        sendAll(s, response);
         return;
     }
 
@@ -162,7 +185,7 @@ void performHealthCheck(bool details, GeneveHandler *gh, int s, HealthCheckForma
     }
 
     std::string response = responseStream.str();
-    send(s, response.c_str(), response.length(), 0);
+    sendAll(s, response);
 }
 
 /**
@@ -350,7 +373,7 @@ int main(int argc, char *argv[])
     // GWLB only supports IPv4.
     if(healthCheck > 0)
     {
-        if((healthSocket = socket(AF_INET6, SOCK_STREAM, 0)) == 0)
+        if((healthSocket = socket(AF_INET6, SOCK_STREAM, 0)) < 0)
         {
             LOG(LS_CORE, LL_CRITICAL, "Creating health check socket failed: "s + std::strerror(errno));
             exit(EXIT_FAILURE);
@@ -367,7 +390,11 @@ int main(int argc, char *argv[])
             LOG(LS_CORE, LL_CRITICAL, "Unable to listen to health status port: "s + std::strerror(errno));
             exit(EXIT_FAILURE);
         }
-        listen(healthSocket, 3);
+        if(listen(healthSocket, 3) < 0)
+        {
+            LOG(LS_CORE, LL_CRITICAL, "Unable to listen on health status port: "s + std::strerror(errno));
+            exit(EXIT_FAILURE);
+        }
     }
 
     signal(SIGINT, shutdownHandler);
@@ -399,10 +426,15 @@ int main(int argc, char *argv[])
             struct sockaddr_in6 from;
             socklen_t fromlen = sizeof(from);
             hsClient = accept(healthSocket, (struct sockaddr *)&from, &fromlen);
-            LOG(LS_HEALTHCHECK, LL_DEBUG, "Processing a health check client for " + sockaddrToName((struct sockaddr *)&from));
-            std::string path = healthFormat == HealthCheckFormat::PROMETHEUS ? readRequestPath(hsClient) : "";
-            performHealthCheck(detailedHealth, gh, hsClient, healthFormat, path);
-            close(hsClient);
+            if(hsClient < 0)
+            {
+                LOG(LS_HEALTHCHECK, LL_IMPORTANT, "Unable to accept health check client: "s + std::strerror(errno));
+            } else {
+                LOG(LS_HEALTHCHECK, LL_DEBUG, "Processing a health check client for " + sockaddrToName((struct sockaddr *)&from));
+                std::string path = healthFormat == HealthCheckFormat::PROMETHEUS ? readRequestPath(hsClient) : "";
+                performHealthCheck(detailedHealth, gh, hsClient, healthFormat, path);
+                close(hsClient);
+            }
             ticksSinceCheck = 60;
         }
 
