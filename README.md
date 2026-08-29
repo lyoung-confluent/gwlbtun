@@ -113,7 +113,7 @@ Udp: 2985556669902 428 0 666162 0 0 0 0 0
 If RcvbufErrors is incrementing steadily, you should increase the rmem values as described above.
 
 ### Health Check output
-If you do not provide the -s flag, the health check port produces human-readable statistics about the traffic gwlbtun is processing. If you add in the -j flag, this output is formatted as JSON for consumption by outside monitoring processes.
+If you do not provide the -s flag, the health check port produces human-readable statistics about the traffic gwlbtun is processing. If you add in the -j flag, this output is formatted as JSON for consumption by outside monitoring processes. If you add in the -m flag instead, this output is formatted as Prometheus text exposition format, suitable for a Prometheus server to scrape directly from the health check port.
 
 ## Security
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
