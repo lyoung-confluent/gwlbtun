@@ -215,17 +215,23 @@ GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& 
         sendingSock(-1),
         createCallback(std::move(createCallback)), destroyCallback(std::move(destroyCallback))
 {
+    // Empty when netns mode is off. TunInterface needs this too (not just the NetnsScope below): its
+    // writePacket() lazily allocates a queue the first time a *different* thread (a UDP receiver or
+    // tunnel processor, never scoped into this ENI's namespace) calls it, and that allocation has to
+    // join the same namespace or it silently creates a second, unconfigured device in the root namespace.
+    std::string netnsName = useNetns ? MakeNetnsName(eni) : ""s;
+
     {
         // If netns mode is on, build (or join, e.g. after a crash/restart reusing this ENI) the ENI's
         // dedicated network namespace and move this thread into it for just long enough to create both
         // TUN devices directly inside it - see NetNamespace.h for why this is safe across threads.
         std::optional<NetnsScope> netnsScope;
         if(useNetns)
-            netnsScope.emplace(MakeNetnsName(eni));
+            netnsScope.emplace(netnsName);
 
-        tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+        tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2), netnsName);
 #ifndef NO_RETURN_TRAFFIC
-        tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+        tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2), netnsName);
 #endif
     }   // netnsScope (if any) destructs here, restoring this thread to the root namespace.
 

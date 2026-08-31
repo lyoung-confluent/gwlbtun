@@ -70,7 +70,7 @@ private:
 
 class TunInterface {
 public:
-    TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcher);
+    TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcher, std::string netnsName);
     ~TunInterface();
 
     void writePacket(unsigned char *pkt, ssize_t pktlen);
@@ -86,6 +86,9 @@ private:
     std::atomic<uint64_t> pktsOut, bytesOut, pktsDropped;
     std::array<class TunInterfaceThread, MAX_THREADS> threads;
     boost::concurrent_flat_map<pthread_t, int> writerHandles;
+    // Name of this ENI's network namespace in --netns mode, empty otherwise. writePacket() needs this
+    // to join the namespace before lazily allocating a new writer queue - see the comment there.
+    std::string netnsName;
     int allocateHandle();
 };
 
