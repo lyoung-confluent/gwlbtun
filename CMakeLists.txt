@@ -20,5 +20,7 @@ add_executable(gwlbtun main.cpp UDPPacketReceiver.cpp UDPPacketReceiver.h Geneve
         HealthCheck.h
         FlowCacheHealthCheck.cpp
         PrometheusExporter.h
-        PrometheusExporter.cpp)
+        PrometheusExporter.cpp
+        NetNamespace.h
+        NetNamespace.cpp)
 target_link_libraries (gwlbtun ${CMAKE_THREAD_LIBS_INIT})

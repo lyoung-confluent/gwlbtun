@@ -24,4 +24,4 @@ docker run --rm --cap-add=NET_ADMIN --device=/dev/net/tun -p 80:80 \
   ghcr.io/lyoung-confluent/gwlbtun:latest -p 80
 ```
 
-`gwlbtun` needs `CAP_NET_ADMIN` and access to `/dev/net/tun` to create tunnel interfaces; pass any of its normal CLI options after the image name.
+`gwlbtun` needs `CAP_NET_ADMIN` and access to `/dev/net/tun` to create tunnel interfaces; pass any of its normal CLI options after the image name. The `--netns` option additionally needs `--cap-add=SYS_ADMIN` (or `--privileged`), since it creates/joins Linux network namespaces, and requires the `ip` binary (iproute2) to be present in the image for running the hook scripts inside those namespaces.

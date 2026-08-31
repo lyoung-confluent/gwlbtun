@@ -248,3 +248,13 @@ std::string MakeENIStr(eniid_t eni)
     return ss.str();
 }
 
+/**
+ * Build the name of the per-ENI network namespace used in --netns mode.
+ * @param eni
+ * @return
+ */
+std::string MakeNetnsName(eniid_t eni)
+{
+    return "vpce-"s + MakeENIStr(eni);
+}
+
