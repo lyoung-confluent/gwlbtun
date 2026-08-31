@@ -68,9 +68,9 @@ private:
 
 class GeneveHandlerENI {
 public:
-    GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback);
+    GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, int writerQueueCount, ghCallback createCallback, ghCallback destroyCallback);
     ~GeneveHandlerENI();
-    void udpReceiverCallback(GwlbData gd, unsigned char *pkt, ssize_t pktlen);
+    void udpReceiverCallback(int threadNumber, GwlbData gd, unsigned char *pkt, ssize_t pktlen);
     void tunReceiverCallback(unsigned char *pktbuf, ssize_t pktlen);
     GeneveHandlerENIHealthCheck check();
     bool hasGoneIdle(int timeout);
@@ -103,7 +103,7 @@ private:
   */
  class GeneveHandlerENIPtr {
  public:
-    GeneveHandlerENIPtr(eniid_t eni, int idleTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback);
+    GeneveHandlerENIPtr(eniid_t eni, int idleTimeout, ThreadConfig& tunThreadConfig, int writerQueueCount, ghCallback createCallback, ghCallback destroyCallback);
     std::shared_ptr<GeneveHandlerENI> ptr;
  };
 
@@ -122,7 +122,7 @@ private:
 class GeneveHandler {
 public:
     GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads);
-    void udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, struct in_addr *srcAddr, uint16_t srcPort, struct in_addr *dstAddr, uint16_t dstPort);
+    void udpReceiverCallback(int threadNumber, unsigned char *pkt, ssize_t pktlen, struct in_addr *srcAddr, uint16_t srcPort, struct in_addr *dstAddr, uint16_t dstPort);
     GeneveHandlerHealthCheck check();
     bool healthy;                  // Updated by check()
 
@@ -133,6 +133,8 @@ private:
     int eniDestroyTimeout;
     int cacheTimeout;
     ThreadConfig tunThreadConfig;
+    // Number of UDP receiver threads, i.e. the number of writer queues each TunInterface must pre-open.
+    int writerQueueCount;
     UDPPacketReceiver udpRcvr;
 
     // Thread-local fast-path cache: per-thread weak references to ENI handlers, keyed by this instance

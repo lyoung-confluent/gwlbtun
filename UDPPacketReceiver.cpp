@@ -255,7 +255,7 @@ int UDPPacketReceiverThread::threadFunction()
                             pktsIn ++;
                             bytesIn += msgLen;
                             try {
-                                recvDispatcher(pktbuf, msgLen, &src_addr4->sin_addr, be16toh(src_addr4->sin_port), &ipi->ipi_spec_dst, portNumber);
+                                recvDispatcher(threadNumber, pktbuf, msgLen, &src_addr4->sin_addr, be16toh(src_addr4->sin_port), &ipi->ipi_spec_dst, portNumber);
                             }
                             catch (std::exception& e) {
                                 LOG(LS_UDP, LL_IMPORTANT, "UDP packet dispatch function failed: "s + e.what());

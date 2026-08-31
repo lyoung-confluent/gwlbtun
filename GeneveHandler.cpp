@@ -63,10 +63,10 @@ std::string GwlbData::text()
 GeneveHandler::GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads)
         : healthy(true),
           createCallback(std::move(createCallback)), destroyCallback(std::move(destroyCallback)), eniDestroyTimeout(destroyTimeout), cacheTimeout(cacheTimeout),
-          tunThreadConfig(std::move(tunThreads))
+          tunThreadConfig(std::move(tunThreads)), writerQueueCount((int)udpThreads.cfg.size())
 {
     // Set up UDP receiver threads.
-    udpRcvr.setup(udpThreads, GENEVE_PORT, std::bind(&GeneveHandler::udpReceiverCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+    udpRcvr.setup(udpThreads, GENEVE_PORT, std::bind(&GeneveHandler::udpReceiverCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6, std::placeholders::_7));
 }
 
 /**
@@ -137,7 +137,7 @@ GeneveHandlerHealthCheck GeneveHandler::check()
  * @param dstAddr Destination address the packet was sent to.
  * @param dstPort Destination port the packet was sent to.
  */
-void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, struct in_addr *srcAddr, uint16_t srcPort, struct in_addr *dstAddr, uint16_t dstPort)
+void GeneveHandler::udpReceiverCallback(int threadNumber, unsigned char *pkt, ssize_t pktlen, struct in_addr *srcAddr, uint16_t srcPort, struct in_addr *dstAddr, uint16_t dstPort)
 {
     if(IS_LOGGING(LS_GENEVE, LL_DEBUG))
     {
@@ -167,7 +167,7 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
         auto &localCache = tlsEniCache[this];
         if (auto it = localCache.find(gwlbeEniId); it != localCache.end()) {
             if (auto sp = it->second.lock()) {
-                sp->udpReceiverCallback(std::move(gd), pkt, pktlen);
+                sp->udpReceiverCallback(threadNumber, std::move(gd), pkt, pktlen);
                 return;
             } else {
                 localCache.erase(it);
@@ -179,7 +179,7 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
         auto cb = [&](const auto& eniHandler) {
             resolvedHandler = eniHandler.second.ptr;
         };
-        if(eniHandlers.try_emplace_or_cvisit(gwlbeEniId, gwlbeEniId, cacheTimeout, tunThreadConfig, createCallback, destroyCallback, cb))
+        if(eniHandlers.try_emplace_or_cvisit(gwlbeEniId, gwlbeEniId, cacheTimeout, tunThreadConfig, writerQueueCount, createCallback, destroyCallback, cb))
         {
             // We did a create - redo the visit to capture ptr
             eniHandlers.cvisit(gwlbeEniId, cb);
@@ -188,7 +188,7 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
         // Store in thread-local cache and dispatch
         if (resolvedHandler) {
             localCache.emplace(gwlbeEniId, std::weak_ptr<GeneveHandlerENI>(resolvedHandler));
-            resolvedHandler->udpReceiverCallback(std::move(gd), pkt, pktlen);
+            resolvedHandler->udpReceiverCallback(threadNumber, std::move(gd), pkt, pktlen);
         }
     }
     catch (std::exception& e) {
@@ -201,7 +201,7 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
  * GeneveHandlerENI handles all aspects of handling for a given ENI. It is separated out this way to make dealing with
  * keeping all the resources needed on a per ENI basis easier.
  */
-GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback) :
+GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, int writerQueueCount, ghCallback createCallback, ghCallback destroyCallback) :
         eni(eni), eniStr(MakeENIStr(eni)), cacheTimeout(cacheTimeout),
         devInName(devname_make(eni, true)),
 #ifndef NO_RETURN_TRAFFIC
@@ -214,9 +214,9 @@ GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& 
         createCallback(std::move(createCallback)), destroyCallback(std::move(destroyCallback))
 {
     // Set up a socket we use for sending traffic out for ENI.
-    tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+    tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, writerQueueCount, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
 #ifndef NO_RETURN_TRAFFIC
-    tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+    tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, writerQueueCount, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
     sendingSock = socket(AF_INET,SOCK_RAW, IPPROTO_RAW);
     if(sendingSock == -1)
         throw std::runtime_error("Unable to allocate a socket for sending UDP traffic.");
@@ -324,7 +324,7 @@ void GeneveHandlerENI::tunReceiverCallback(unsigned char *pktbuf, ssize_t pktlen
  * @param pkt The packet received.
  * @param pktlen Length of packet received.
  */
-void GeneveHandlerENI::udpReceiverCallback(GwlbData gd, unsigned char *pkt, ssize_t pktlen)
+void GeneveHandlerENI::udpReceiverCallback(int threadNumber, GwlbData gd, unsigned char *pkt, ssize_t pktlen)
 {
     auto headerLen = gd.header.size();
     try {
@@ -339,7 +339,7 @@ void GeneveHandlerENI::udpReceiverCallback(GwlbData gd, unsigned char *pkt, ssiz
                 gwlbV4Cookies.insert(std::move(ph), std::move(gd));
 #endif
                 // Route the decap'ed packet to our tun interface.
-                (*tunnelIn).writePacket(pkt + headerLen, pktlen - headerLen);
+                (*tunnelIn).writePacket(threadNumber, pkt + headerLen, pktlen - headerLen);
             } else if(iph->ip_v == (unsigned int)6) {
 #ifndef NO_RETURN_TRAFFIC
                 auto ph = PacketHeaderV6(pkt + headerLen, pktlen - headerLen);
@@ -347,7 +347,7 @@ void GeneveHandlerENI::udpReceiverCallback(GwlbData gd, unsigned char *pkt, ssiz
                 gwlbV6Cookies.insert(std::move(ph), std::move(gd));
 #endif
                 // Route the decap'ed packet to our tun interface.
-                (*tunnelIn).writePacket(pkt + headerLen, pktlen - headerLen);
+                (*tunnelIn).writePacket(threadNumber, pkt + headerLen, pktlen - headerLen);
             } else {
                 LOG(LS_UDP, LL_DEBUG, "Got a strange IP protocol version - "s  + ts(iph->ip_v) + " at offset " + ts(headerLen) + ". Dropping packet.");
             }
@@ -429,9 +429,9 @@ bool GeneveHandlerENI::hasGoneIdle(int timeout)
 /**
  * GeneveHandlerENI shared pointer wrapper class
  */
-GeneveHandlerENIPtr::GeneveHandlerENIPtr(eniid_t eni, int cacheTimeout, ThreadConfig &tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback)
+GeneveHandlerENIPtr::GeneveHandlerENIPtr(eniid_t eni, int cacheTimeout, ThreadConfig &tunThreadConfig, int writerQueueCount, ghCallback createCallback, ghCallback destroyCallback)
 {
-    ptr = std::make_shared<GeneveHandlerENI>(eni, cacheTimeout, tunThreadConfig, createCallback, destroyCallback);
+    ptr = std::make_shared<GeneveHandlerENI>(eni, cacheTimeout, tunThreadConfig, writerQueueCount, createCallback, destroyCallback);
 }
 
 

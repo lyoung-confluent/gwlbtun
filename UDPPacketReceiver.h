@@ -11,7 +11,7 @@
 #include "utils.h"
 #include "HealthCheck.h"
 
-typedef std::function<void(unsigned char *pktBuf, ssize_t pktBufLen, struct in_addr *srcIp, uint16_t srcPort, struct in_addr *dstIp, uint16_t dstPort)> udpCallback;
+typedef std::function<void(int threadNumber, unsigned char *pktBuf, ssize_t pktBufLen, struct in_addr *srcIp, uint16_t srcPort, struct in_addr *dstIp, uint16_t dstPort)> udpCallback;
 
 
 class UDPPacketReceiverThreadHealthCheck : public HealthCheck {

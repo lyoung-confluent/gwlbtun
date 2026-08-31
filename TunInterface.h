@@ -10,7 +10,7 @@
 #include <shared_mutex>
 #include <list>
 #include <unistd.h>
-#include <boost/unordered/concurrent_flat_map.hpp>
+#include <vector>
 #include "utils.h"
 #include "HealthCheck.h"
 
@@ -70,10 +70,10 @@ private:
 
 class TunInterface {
 public:
-    TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcher);
+    TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, int writerQueueCount, tunCallback recvDispatcher);
     ~TunInterface();
 
-    void writePacket(unsigned char *pkt, ssize_t pktlen);
+    void writePacket(int writerIndex, unsigned char *pkt, ssize_t pktlen);
     bool healthCheck();
     TunInterfaceHealthCheck status();
     void shutdown();
@@ -85,7 +85,9 @@ private:
     std::atomic<std::chrono::steady_clock::time_point> lastPacket;
     std::atomic<uint64_t> pktsOut, bytesOut, pktsDropped;
     std::array<class TunInterfaceThread, MAX_THREADS> threads;
-    boost::concurrent_flat_map<pthread_t, int> writerHandles;
+    // One pre-opened queue fd per UDP receiver thread, indexed by that thread's stable threadNumber.
+    // All opened eagerly in the constructor (see writePacket()) rather than lazily on first write.
+    std::vector<int> writerHandles;
     int allocateHandle();
 };
 

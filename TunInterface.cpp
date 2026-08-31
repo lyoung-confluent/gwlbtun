@@ -33,7 +33,7 @@ using namespace std::string_literals;
  * @param mtu MTU to set the interface to.
  * @param recvDispatcher Function the thread should callback to on packets received.
  */
-TunInterface::TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcherParam)
+TunInterface::TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, int writerQueueCount, tunCallback recvDispatcherParam)
 : lastPacket(std::chrono::steady_clock::now()),pktsOut(0),bytesOut(0),pktsDropped(0)
 {
     LOG(LS_TUNNEL, LL_DEBUG, "TunInterface creating for "s + devname);
@@ -46,6 +46,15 @@ TunInterface::TunInterface(std::string devname, int mtu, ThreadConfig threadConf
         threads[tIndex].setup(tIndex, core, allocateHandle(), recvDispatcherParam);
         tIndex ++;
     }
+
+    // Pre-open every writer-side queue up front too, rather than lazily on each UDP receiver thread's
+    // first write. GeneveHandlerENI's createCallback (invoked right after both TunInterfaces are built)
+    // is used to move the resulting devices into a network namespace; a queue opened later via TUNSETIFF
+    // wouldn't find the device by name in this process's (host) namespace anymore, and TUNSETIFF silently
+    // creates a new device rather than failing - producing a second, orphaned device under the same name.
+    writerHandles.reserve(writerQueueCount);
+    for(int i = 0; i < writerQueueCount; i++)
+        writerHandles.push_back(allocateHandle());
 
     // Mark the tun device link up. We need a dummy socket to do this call.
     struct ifreq ifr;
@@ -106,31 +115,27 @@ void TunInterface::shutdown()
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    // Every reader thread has now stopped. Close each per-writer-thread queue fd we handed out in
-    // writePacket(); together with the reader fds closed in ~TunInterfaceThread this detaches all queues
-    // so the non-persistent tun device is removed by the kernel. This is race-free against writePacket():
-    // an ENI (and thus this TunInterface) is only destroyed once no callback still holds a shared_ptr to
-    // it, so no thread can be inside writePacket() at this point. clear() makes a second shutdown() a no-op.
-    writerHandles.visit_all([](auto& wh) { if(wh.second >= 0) close(wh.second); });
+    // Every reader thread has now stopped. Close each writer queue fd opened in the constructor; together
+    // with the reader fds closed in ~TunInterfaceThread this detaches all queues so the non-persistent tun
+    // device is removed by the kernel. This is race-free against writePacket(): an ENI (and thus this
+    // TunInterface) is only destroyed once no callback still holds a shared_ptr to it, so no thread can be
+    // inside writePacket() at this point. clear() makes a second shutdown() a no-op.
+    for(int fd : writerHandles)
+        if(fd >= 0) close(fd);
     writerHandles.clear();
 }
 
 /**
  * Send a packet out the TUN interface. Updates internal counters as well.
  *
+ * @param writerIndex Stable index (matching the calling UDP receiver thread's threadNumber) of the
+ *                     pre-opened writer queue to send on.
  * @param pkt Buffer pointing to the packet to send
  * @param pktlen Packet length
  */
-void TunInterface::writePacket(unsigned char *pkt, ssize_t pktlen)
+void TunInterface::writePacket(int writerIndex, unsigned char *pkt, ssize_t pktlen)
 {
-    ssize_t written = -1;
-    if(!writerHandles.visit(pthread_self(), [&](auto& targetfd) { written = write(targetfd.second, (void *)pkt, pktlen); }))
-    {
-        // Key wasn't found - create and send.
-        int targetfd = allocateHandle();
-        writerHandles.emplace(pthread_self(), targetfd);
-        written = write(targetfd, (void *)pkt, pktlen);
-    }
+    ssize_t written = write(writerHandles[writerIndex], (void *)pkt, pktlen);
     lastPacket = std::chrono::steady_clock::now();
     if(written == pktlen)
     {
