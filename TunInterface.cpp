@@ -20,9 +20,11 @@
 #include <unistd.h>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <thread>
 #include "utils.h"
 #include "Logger.h"
+#include "NetNamespace.h"
 
 using namespace std::string_literals;
 
@@ -32,12 +34,14 @@ using namespace std::string_literals;
  * @param devname The name of the TUN itnerface to build.
  * @param mtu MTU to set the interface to.
  * @param recvDispatcher Function the thread should callback to on packets received.
+ * @param netnsName Name of this ENI's network namespace in --netns mode, empty otherwise.
  */
-TunInterface::TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcherParam)
+TunInterface::TunInterface(std::string devname, int mtu, ThreadConfig threadConfig, tunCallback recvDispatcherParam, std::string netnsName)
 : lastPacket(std::chrono::steady_clock::now()),pktsOut(0),bytesOut(0)
 {
     LOG(LS_TUNNEL, LL_DEBUG, "TunInterface creating for "s + devname);
     this->devname = devname;
+    this->netnsName = netnsName;
 
     // Set up our threads as per threadConfig
     int tIndex = 0;
@@ -115,10 +119,22 @@ void TunInterface::writePacket(unsigned char *pkt, ssize_t pktlen)
 {
     if(!writerHandles.visit(pthread_self(), [&](auto& targetfd) { write(targetfd.second, (void *)pkt, pktlen); }))
     {
-        // Key wasn't found - create and send.
-        int targetfd = allocateHandle();
-        writerHandles.emplace(pthread_self(), targetfd);
-        write(targetfd, (void *)pkt, pktlen);
+        // Key wasn't found - create and send. This is the first packet this thread has ever written to
+        // us: unlike the reader threads set up in our constructor, this thread has never joined the
+        // ENI's namespace, so in --netns mode allocateHandle() would otherwise do its TUNSETIFF lookup
+        // in the root namespace and silently create a second, unconfigured device there instead of
+        // finding the real one. Join the namespace for just long enough to allocate the queue.
+        try {
+            std::optional<NetnsScope> netnsScope;
+            if(!netnsName.empty())
+                netnsScope.emplace(netnsName);
+            int targetfd = allocateHandle();
+            writerHandles.emplace(pthread_self(), targetfd);
+            write(targetfd, (void *)pkt, pktlen);
+        }
+        catch(std::exception& e) {
+            LOG(LS_TUNNEL, LL_IMPORTANT, "Failed to allocate a new write queue for "s + devname + ": "s + e.what());
+        }
     }
     lastPacket = std::chrono::steady_clock::now();
     pktsOut ++; bytesOut += pktlen;
