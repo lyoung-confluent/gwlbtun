@@ -14,7 +14,9 @@
 
 #include "GeneveHandler.h"
 #include "utils.h"
+#include "NetNamespace.h"
 #include <arpa/inet.h>
+#include <optional>
 #include <utility>
 #include "Logger.h"
 
@@ -59,10 +61,10 @@ std::string GwlbData::text()
  * @param destroyCallback Function to call when an endpoint has gone away and we need to clean up.
  * @param destroyTimeout How long to wait for an endpoint to be idle before calling destroyCallback.
  */
-GeneveHandler::GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads)
+GeneveHandler::GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads, bool useNetns)
         : healthy(true),
           createCallback(std::move(createCallback)), destroyCallback(std::move(destroyCallback)), eniDestroyTimeout(destroyTimeout), cacheTimeout(cacheTimeout),
-          tunThreadConfig(std::move(tunThreads))
+          tunThreadConfig(std::move(tunThreads)), useNetns(useNetns)
 {
     // Set up UDP receiver threads.
     udpRcvr.setup(udpThreads, GENEVE_PORT, std::bind(&GeneveHandler::udpReceiverCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
@@ -170,7 +172,7 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
         auto cb = [&](const auto& eniHandler) {
             resolvedHandler = eniHandler.second.ptr;
         };
-        if(eniHandlers.try_emplace_or_cvisit(gwlbeEniId, gwlbeEniId, cacheTimeout, tunThreadConfig, createCallback, destroyCallback, cb))
+        if(eniHandlers.try_emplace_or_cvisit(gwlbeEniId, gwlbeEniId, cacheTimeout, tunThreadConfig, createCallback, destroyCallback, useNetns, cb))
         {
             // We did a create - redo the visit to capture ptr
             eniHandlers.cvisit(gwlbeEniId, cb);
@@ -192,21 +194,34 @@ void GeneveHandler::udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, stru
  * GeneveHandlerENI handles all aspects of handling for a given ENI. It is separated out this way to make dealing with
  * keeping all the resources needed on a per ENI basis easier.
  */
-GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback) :
-        eni(eni), eniStr(MakeENIStr(eni)), cacheTimeout(cacheTimeout),
-        devInName(devname_make(eni, true)),
+GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback, bool useNetns) :
+        eni(eni), eniStr(MakeENIStr(eni)), cacheTimeout(cacheTimeout), useNetns(useNetns),
+        devInName(devname_make(eni, true, useNetns)),
 #ifndef NO_RETURN_TRAFFIC
-        devOutName(devname_make(eni, false)),
+        devOutName(devname_make(eni, false, useNetns)),
         gwlbV4Cookies("IPv4 Flow Cache for ENI " + eniStr, cacheTimeout), gwlbV6Cookies("IPv6 Flow Cache for ENI " + eniStr, cacheTimeout),
 #else
     devOutName("none"s),
 #endif
         createCallback(std::move(createCallback)), destroyCallback(std::move(destroyCallback))
 {
-    // Set up a socket we use for sending traffic out for ENI.
-    tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+    {
+        // If netns mode is on, build (or join, e.g. after a crash/restart reusing this ENI) the ENI's
+        // dedicated network namespace and move this thread into it for just long enough to create both
+        // TUN devices directly inside it - see NetNamespace.h for why this is safe across threads.
+        std::optional<NetnsScope> netnsScope;
+        if(useNetns)
+            netnsScope.emplace(MakeNetnsName(eni));
+
+        tunnelIn = std::make_unique<TunInterface>(devInName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
 #ifndef NO_RETURN_TRAFFIC
-    tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+        tunnelOut = std::make_unique<TunInterface>(devOutName, GWLB_MTU, tunThreadConfig, std::bind(&GeneveHandlerENI::tunReceiverCallback, this, std::placeholders::_1, std::placeholders::_2));
+#endif
+    }   // netnsScope (if any) destructs here, restoring this thread to the root namespace.
+
+#ifndef NO_RETURN_TRAFFIC
+    // This socket sends the encapsulated return traffic back out over the host's real NIC to GWLB, so it
+    // must always be created in the root namespace - i.e. after netnsScope above has gone out of scope.
     sendingSock = socket(AF_INET,SOCK_RAW, IPPROTO_RAW);
     if(sendingSock == -1)
         throw std::runtime_error("Unable to allocate a socket for sending UDP traffic.");
@@ -217,6 +232,11 @@ GeneveHandlerENI::GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& 
 GeneveHandlerENI::~GeneveHandlerENI()
 {
     this->destroyCallback(devInName, devOutName, this->eni);
+    // The lazy unmount below detaches the namespace's name immediately; the namespace itself (and the
+    // TUN devices still in it) persist until the tunnelIn/tunnelOut destructors below release their fds,
+    // same as it would with no --netns involved.
+    if(useNetns)
+        destroyNetns(MakeNetnsName(eni));
 }
 
 /**
@@ -412,13 +432,15 @@ bool GeneveHandlerENI::hasGoneIdle(int timeout)
 /**
  * GeneveHandlerENI shared pointer wrapper class
  */
-GeneveHandlerENIPtr::GeneveHandlerENIPtr(eniid_t eni, int cacheTimeout, ThreadConfig &tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback)
+GeneveHandlerENIPtr::GeneveHandlerENIPtr(eniid_t eni, int cacheTimeout, ThreadConfig &tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback, bool useNetns)
 {
-    ptr = std::make_shared<GeneveHandlerENI>(eni, cacheTimeout, tunThreadConfig, createCallback, destroyCallback);
+    ptr = std::make_shared<GeneveHandlerENI>(eni, cacheTimeout, tunThreadConfig, createCallback, destroyCallback, useNetns);
 }
 
 
-std::string devname_make(eniid_t eni, bool inbound) {
+std::string devname_make(eniid_t eni, bool inbound, bool useNetns) {
+    if(useNetns)
+        return inbound ? "gwi"s : "gwo"s;
     if(inbound)
         return "gwi-"s + toBase60(eni);
     else

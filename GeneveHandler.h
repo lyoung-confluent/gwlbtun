@@ -66,7 +66,7 @@ private:
 
 class GeneveHandlerENI {
 public:
-    GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback);
+    GeneveHandlerENI(eniid_t eni, int cacheTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback, bool useNetns);
     ~GeneveHandlerENI();
     void udpReceiverCallback(GwlbData gd, unsigned char *pkt, ssize_t pktlen);
     void tunReceiverCallback(unsigned char *pktbuf, ssize_t pktlen);
@@ -77,6 +77,7 @@ private:
     const eniid_t eni;
     const std::string eniStr;
     int cacheTimeout;
+    const bool useNetns;
 
     const std::string devInName;
     const std::string devOutName;
@@ -101,7 +102,7 @@ private:
   */
  class GeneveHandlerENIPtr {
  public:
-    GeneveHandlerENIPtr(eniid_t eni, int idleTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback);
+    GeneveHandlerENIPtr(eniid_t eni, int idleTimeout, ThreadConfig& tunThreadConfig, ghCallback createCallback, ghCallback destroyCallback, bool useNetns);
     std::shared_ptr<GeneveHandlerENI> ptr;
  };
 
@@ -119,7 +120,7 @@ private:
 
 class GeneveHandler {
 public:
-    GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads);
+    GeneveHandler(ghCallback createCallback, ghCallback destroyCallback, int destroyTimeout, int cacheTimeout, ThreadConfig udpThreads, ThreadConfig tunThreads, bool useNetns);
     void udpReceiverCallback(unsigned char *pkt, ssize_t pktlen, struct in_addr *srcAddr, uint16_t srcPort, struct in_addr *dstAddr, uint16_t dstPort);
     GeneveHandlerHealthCheck check();
     bool healthy;                  // Updated by check()
@@ -131,6 +132,7 @@ private:
     int eniDestroyTimeout;
     int cacheTimeout;
     ThreadConfig tunThreadConfig;
+    bool useNetns;
     UDPPacketReceiver udpRcvr;
 
     // Thread-local fast-path cache: per-thread weak references to ENI handlers, keyed by this instance
@@ -141,6 +143,6 @@ private:
 
 
 
-std::string devname_make(eniid_t eni, bool inbound);
+std::string devname_make(eniid_t eni, bool inbound, bool useNetns);
 
 #endif //GWLBTUN_GENEVEHANDLER_H

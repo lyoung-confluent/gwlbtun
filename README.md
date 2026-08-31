@@ -16,7 +16,7 @@ In the directory with the source code, do ```cmake3 .; make``` to build. This co
 **This version requires the Boost libraries, version 1.83.0 or greater.** This tends to be a newer version than available on distributions (for example, at time of writing, 1.75 is available in AL2023). You may need to go to https://www.boost.org/, download, and install a newer version than what's available in the repositories. Note that only the headers are needed - you do not need to go through Boost compilation. The cmake file looks for the source to be extracted into /home/ec2-user/boost - you can change this path by changing the `Boost_INCLUDE_DIR` value in CMakeLists.txt before running `cmake3`.  
 
 ## Usage
-For Linux, the application requires CAP_NET_ADMIN capability to create the tunnel interfaces along with the example helper scripts.
+For Linux, the application requires CAP_NET_ADMIN capability to create the tunnel interfaces along with the example helper scripts. The `--netns` option additionally requires CAP_SYS_ADMIN, since it creates/joins Linux network namespaces, and requires the `ip` binary (iproute2) to be installed for running the hook scripts inside those namespaces.
 ```
 Tunnel Handler for AWS Gateway Load Balancer
 Usage: ./gwlbtun [options]
@@ -42,6 +42,12 @@ AFFIN arguments take a comma separated list of cores or range of cores, e.g. 1-2
 It is recommended to have the same number of UDP threads as tunnel processor threads, in one-arm operation.
 If unspecified, --udpthreads <N> and --tunthreads <N> will be assumed as a default, based on the number of cores present.
 
+Namespace options:
+  --netns                  Create each ENI's tunnel interfaces (named 'gwi'/'gwo') inside a dedicated, persistent Linux
+                           network namespace ('vpce-<ENI ID>'), and run the hook scripts inside it via 'ip netns exec'.
+                           Requires CAP_SYS_ADMIN in addition to CAP_NET_ADMIN, and the 'ip' binary (iproute2) to be
+                           installed for the hook-script invocation.
+
 Logging options:
   --logging CONFIG         Set the logging configuration, as described below.
 ---------------------------------------------------------------------------------------------------------
@@ -56,7 +62,8 @@ The hook scripts will be called with the following arguments:
 4: The GWLBE ENI ID in base 16 (e.g. '2b8ee1d4db0c51c4') associated with this tunnel.
 
 The <X> in the interface name is replaced with the base 60 encoded ENI ID (to fit inside the 15 character
-device name limit).
+device name limit). With --netns, each ENI gets its own network namespace, so the interfaces are simply
+named 'gwi'/'gwo' instead, and the hook scripts run inside that namespace ('vpce-<ENI ID>', ENI ID as above).
 ---------------------------------------------------------------------------------------------------------
 The logging configuration can be set by passing a string to the --logging option. That string is a series of <section>=<level>, comma separated and case insensitive.
 The available sections are: core udp geneve tunnel healthcheck all 

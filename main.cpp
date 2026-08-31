@@ -19,6 +19,7 @@ using namespace std::string_literals;
 
 std::string newCmd = "";
 std::string delCmd = "";
+bool useNetns = false;
 volatile sig_atomic_t keepRunning = 1;
 
 /**
@@ -34,6 +35,8 @@ void newInterfaceCallback(std::string ingressInt, const std::string egressInt, e
     if(newCmd.length() > 0)
     {
         std::stringstream ss;
+        if(useNetns)
+            ss << "ip netns exec " << MakeNetnsName(eniId) << " ";
         ss << newCmd << " CREATE " << ingressInt << " " << egressInt << " " << MakeENIStr(eniId);
         system(ss.str().c_str());
     }
@@ -51,6 +54,8 @@ void deleteInterfaceCallback(std::string ingressInt, const std::string egressInt
     if(delCmd.length() > 0)
     {
         std::stringstream ss;
+        if(useNetns)
+            ss << "ip netns exec " << MakeNetnsName(eniId) << " ";
         ss << delCmd << " DESTROY " << ingressInt << " " << egressInt << " " << MakeENIStr(eniId);
         system(ss.str().c_str());
     }
@@ -134,6 +139,12 @@ void printHelp(char *progname)
             "It is recommended to have the same number of UDP threads as tunnel processor threads, in one-arm operation.\n"
             "If unspecified, --udpthreads %d and --tunthreads %d will be assumed as a default, based on the number of cores present.\n"
             "\n"
+            "Namespace options:\n"
+            "  --netns                  Create each ENI's tunnel interfaces (named 'gwi'/'gwo') inside a dedicated, persistent Linux\n"
+            "                           network namespace ('vpce-<ENI ID>'), and run the hook scripts inside it via 'ip netns exec'.\n"
+            "                           Requires CAP_SYS_ADMIN in addition to CAP_NET_ADMIN, and the 'ip' binary (iproute2) to be\n"
+            "                           installed for the hook-script invocation.\n"
+            "\n"
             "Logging options:\n"
             "  --logging CONFIG         Set the logging configuration, as described below.\n"
 #ifdef NO_RETURN_TRAFFIC
@@ -151,7 +162,8 @@ void printHelp(char *progname)
             "4: The GWLBE ENI ID in base 16 (e.g. '2b8ee1d4db0c51c4') associated with this tunnel.\n"
             "\n"
             "The <X> in the interface name is replaced with the base 60 encoded ENI ID (to fit inside the 15 character\n"
-            "device name limit).\n"
+            "device name limit). With --netns, each ENI gets its own network namespace, so the interfaces are simply\n"
+            "named 'gwi'/'gwo' instead, and the hook scripts run inside that namespace ('vpce-<ENI ID>', ENI ID as above).\n"
             "---------------------------------------------------------------------------------------------------------\n"
             , VERSION_MAJOR, VERSION_MINOR, progname, progname, numCores(), numCores());
     fprintf(stderr, logger->help().c_str());
@@ -193,6 +205,7 @@ int main(int argc, char *argv[])
             {"logging", required_argument, NULL, 0},       // optind 11
             {"json", no_argument, NULL, 'j'},              // optind 12
             {"idle", required_argument, NULL, 'i'},        // optind 13
+            {"netns", no_argument, NULL, 0},               // optind 14
             {0, 0, 0, 0}
     };
 
@@ -219,6 +232,9 @@ int main(int argc, char *argv[])
                         break;
                     case 11:
                         logoptions = std::string(optarg);
+                        break;
+                    case 14:
+                        useNetns = true;
                         break;
                 }
                 break;
@@ -292,7 +308,7 @@ int main(int argc, char *argv[])
     ParseThreadConfiguration(udpthreads, udpaffinity, &udp);
     ParseThreadConfiguration(tunthreads, tunaffinity, &tun);
 
-    auto gh = new GeneveHandler(&newInterfaceCallback, &deleteInterfaceCallback, tunnelTimeout, cacheTimeout, udp, tun);
+    auto gh = new GeneveHandler(&newInterfaceCallback, &deleteInterfaceCallback, tunnelTimeout, cacheTimeout, udp, tun, useNetns);
     struct timespec timeout;
     timeout.tv_sec = 1; timeout.tv_nsec = 0;
     fd_set fds;

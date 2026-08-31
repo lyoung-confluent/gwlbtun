@@ -47,6 +47,7 @@ double timepointDeltaDouble(std::chrono::steady_clock::time_point t1, std::chron
 std::string sockaddrToName(struct sockaddr *sa);
 void ParseThreadConfiguration(int threadcount, std::string& affinity, ThreadConfig *dest);
 std::string MakeENIStr(eniid_t eni);
+std::string MakeNetnsName(eniid_t eni);
 int FindIndexOf(std::vector<std::string> vector, std::string search);
 
 // If hashFunc is a function that does not result in the same hash for both flow directions,
